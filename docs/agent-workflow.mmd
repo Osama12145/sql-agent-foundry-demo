@@ -1,0 +1,55 @@
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+    __start__([START]):::first
+    publish_agent(publish_agent):::ours
+    start_run(start_run):::ours
+    decide{{"Foundry decides<br/>next action"}}:::azure
+    get_database_schema(get_database_schema):::tool
+    execute_sql_query(execute_sql_query):::tool
+    report_unanswerable(report_unanswerable):::tool
+    validate_sql(validate_sql):::guard
+    run_query(run_query):::guard
+    return_tool_error(return_tool_error):::ours
+    decide_display(decide_display):::ours
+    final_answer(final_answer):::azure
+    fail(fail):::ours
+    __end__([END]):::last
+
+    __start__ --> publish_agent;
+    publish_agent -->|instructions + tool schemas| start_run;
+    start_run --> decide;
+
+    decide -. needs_schema .-> get_database_schema;
+    decide -. has_sql .-> execute_sql_query;
+    decide -. outside_schema .-> report_unanswerable;
+    decide -. no_tool_call .-> final_answer;
+    decide -. iteration_limit_reached .-> fail;
+
+    get_database_schema -->|schema| decide;
+
+    execute_sql_query --> validate_sql;
+    validate_sql -. valid_SQL .-> run_query;
+    validate_sql -. blocked_SQL .-> return_tool_error;
+    run_query -. success .-> decide;
+    run_query -. execution_error .-> return_tool_error;
+    return_tool_error -. attempts_remaining .-> decide;
+    return_tool_error -. attempt_budget_spent .-> fail;
+
+    report_unanswerable --> decide;
+
+    final_answer -. rows_returned .-> decide_display;
+    final_answer -. out_of_scope .-> __end__;
+    decide_display --> __end__;
+    fail --> __end__;
+
+    classDef default fill:#eef4f8,stroke:#486270,color:#14252e,line-height:1.2
+    classDef first fill:#ffffff,stroke:#2f6f64,color:#14252e
+    classDef last fill:#d9eee8,stroke:#2f6f64,color:#14252e
+    classDef azure fill:#e8f0fe,stroke:#1a73e8,color:#14252e
+    classDef tool fill:#fef7e0,stroke:#b06000,color:#14252e
+    classDef guard fill:#fce8e6,stroke:#d93025,color:#14252e
+    classDef ours fill:#eef4f8,stroke:#486270,color:#14252e

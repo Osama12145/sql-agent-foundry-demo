@@ -77,38 +77,47 @@ The agent's attempt budget is a third bound, on cost rather than safety:
 
 ## Azure resources
 
-| Resource | Name | Purpose |
+| Resource | Kind | Notes |
 | --- | --- | --- |
-| Resource group | `rg-sqlagent-demo` | groups everything, `swedencentral` |
-| Foundry account | `aif-sqlagent-osama` | kind `AIServices`, project management enabled |
-| Foundry project | `sqlagent` | hosts the agent |
+| Resource group | — | one group for everything, a region where the model is available |
+| Foundry account | `AIServices` | **not** `OpenAI`; project management must be enabled |
+| Foundry project | — | hosts the agent |
 | Model deployment | `gpt-5-mini` | `2025-08-07`, GlobalStandard |
 
-Project endpoint:
-`https://aif-sqlagent-osama.services.ai.azure.com/api/projects/sqlagent`
+An existing Azure OpenAI resource (`kind: OpenAI`) cannot host agents. The
+account must be `kind: AIServices` with `allowProjectManagement: true`.
+
+Project endpoint, which is what `PROJECT_ENDPOINT` needs:
+
+```
+https://<foundry-account>.services.ai.azure.com/api/projects/<project-name>
+```
 
 ### Required role assignment
 
 Foundry's agents data plane is **not** covered by subscription `Owner`. Owner
-grants control-plane actions; agent operations need a data-plane role. Without it
-every call fails with:
+carries `actions` but no `dataActions`, so it can create the Foundry account, the
+project, and the model deployment, and then fail on every agent call with:
 
 ```
 Identity(object id: ...) does not have permissions for
 Microsoft.CognitiveServices/accounts/AIServices/agents/read actions
 ```
 
-Grant the `Azure AI User` role on the Foundry account:
+Grant the `Foundry User` role on the Foundry account. Note the name: this role
+was previously documented as *Azure AI User*, and a script using the old name
+fails to resolve it.
 
 ```powershell
 az role assignment create `
   --assignee-object-id (az ad signed-in-user show --query id -o tsv) `
   --assignee-principal-type User `
-  --role "Azure AI User" `
-  --scope "/subscriptions/<SUBSCRIPTION_ID>/resourceGroups/rg-sqlagent-demo/providers/Microsoft.CognitiveServices/accounts/aif-sqlagent-osama"
+  --role "Foundry User" `
+  --scope "/subscriptions/<SUBSCRIPTION_ID>/resourceGroups/<RESOURCE_GROUP>/providers/Microsoft.CognitiveServices/accounts/<FOUNDRY_ACCOUNT>"
 ```
 
-Role propagation takes a minute or two.
+Role propagation takes a minute or two. Every developer needs this assignment
+individually; on App Service the managed identity needs it too.
 
 ## Setup
 

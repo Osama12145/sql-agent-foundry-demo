@@ -1,8 +1,93 @@
 # Architecture
 
-Two views: the system as a whole, then one agent run in detail.
+Three views: the agent workflow, the system as a whole, then one run in detail.
 
-## 1. System architecture
+## 1. Agent workflow
+
+The same kind of node-and-edge view a graph framework would produce, with one
+decisive difference: **the branching node is not ours.**
+
+In a LangGraph build, every diamond in this diagram would be a conditional edge
+we wrote, and the arrows would be routing rules in our code. Here there is a
+single decision point, `Foundry decides next action`, and it runs in Azure. We do
+not choose whether the agent fetches the schema first, whether it retries after a
+rejected query, or when it stops — we only declare the tools it may call and
+enforce what those tools are allowed to do.
+
+Colour tells you who owns each box: **blue** is Azure, **orange** is a tool the
+agent may call, **red** is the safety boundary that no model output can bypass,
+**grey** is ordinary application code.
+
+```mermaid
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+    __start__([START]):::first
+    publish_agent(publish_agent):::ours
+    start_run(start_run):::ours
+    decide{{"Foundry decides<br/>next action"}}:::azure
+    get_database_schema(get_database_schema):::tool
+    execute_sql_query(execute_sql_query):::tool
+    report_unanswerable(report_unanswerable):::tool
+    validate_sql(validate_sql):::guard
+    run_query(run_query):::guard
+    return_tool_error(return_tool_error):::ours
+    decide_display(decide_display):::ours
+    final_answer(final_answer):::azure
+    fail(fail):::ours
+    __end__([END]):::last
+
+    __start__ --> publish_agent;
+    publish_agent -->|instructions + tool schemas| start_run;
+    start_run --> decide;
+
+    decide -. needs_schema .-> get_database_schema;
+    decide -. has_sql .-> execute_sql_query;
+    decide -. outside_schema .-> report_unanswerable;
+    decide -. no_tool_call .-> final_answer;
+    decide -. iteration_limit_reached .-> fail;
+
+    get_database_schema -->|schema| decide;
+
+    execute_sql_query --> validate_sql;
+    validate_sql -. valid_SQL .-> run_query;
+    validate_sql -. blocked_SQL .-> return_tool_error;
+    run_query -. success .-> decide;
+    run_query -. execution_error .-> return_tool_error;
+    return_tool_error -. attempts_remaining .-> decide;
+    return_tool_error -. attempt_budget_spent .-> fail;
+
+    report_unanswerable --> decide;
+
+    final_answer -. rows_returned .-> decide_display;
+    final_answer -. out_of_scope .-> __end__;
+    decide_display --> __end__;
+    fail --> __end__;
+
+    classDef default fill:#eef4f8,stroke:#486270,color:#14252e,line-height:1.2
+    classDef first fill:#ffffff,stroke:#2f6f64,color:#14252e
+    classDef last fill:#d9eee8,stroke:#2f6f64,color:#14252e
+    classDef azure fill:#e8f0fe,stroke:#1a73e8,color:#14252e
+    classDef tool fill:#fef7e0,stroke:#b06000,color:#14252e
+    classDef guard fill:#fce8e6,stroke:#d93025,color:#14252e
+    classDef ours fill:#eef4f8,stroke:#486270,color:#14252e
+```
+
+Read the loop this way: every tool result returns to `Foundry decides`, and the
+agent keeps taking turns until it makes no further tool call. Two counters keep
+that loop finite, and both are ours rather than the orchestrator's —
+`MAX_EXECUTE_ATTEMPTS` caps rejected queries, `MAX_TOOL_ITERATIONS` caps the
+conversation. Nothing in Azure would stop the loop on its own.
+
+Note also what `validate_sql` and `run_query` are doing in the middle of the
+diagram. Even though the orchestration is remote, every path from the model to
+the database still passes through them, and `report_unanswerable` gives the agent
+a way to decline that produces no SQL at all.
+
+## 2. System architecture
 
 Blue dashed is Azure. Red is our safety boundary. Everything else is our code.
 
@@ -22,8 +107,8 @@ flowchart TB
     end
 
     subgraph AZURE["Azure AI Foundry"]
-        PROJ["Project: sqlagent<br/>aif-sqlagent-osama"]
-        AGENT["Agent: retail-sql-agent<br/>instructions + tool schemas<br/>reasoning effort: low"]
+        PROJ["Foundry project<br/>account kind: AIServices"]
+        AGENT["Agent: retail-sql-agent<br/>instructions + tool schemas"]
         MODEL["Model deployment<br/>gpt-5-mini 2025-08-07"]
         PROJ --- AGENT
         AGENT --- MODEL
@@ -63,7 +148,7 @@ allowed to happen*. Tool bodies execute in our process, so database credentials
 never reach Azure and no model output touches the database without passing
 `validate_select_sql` first.
 
-## 2. One agent run
+## 3. One agent run
 
 Measured on this build: about 2 tool calls and 3 model turns per question, 8–21
 seconds end to end, of which our own code accounts for roughly 0.002 seconds.
@@ -129,7 +214,7 @@ sequenceDiagram
     note over Run,Foundry: whole conversation bounded by<br/>MAX_TOOL_ITERATIONS = 8
 ```
 
-## 3. Where the time goes
+## 4. Where the time goes
 
 Latency is dominated by model turns, not by data. Measured over 3 repeats of the
 four demo questions:
