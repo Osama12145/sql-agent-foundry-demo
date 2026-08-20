@@ -225,6 +225,33 @@ Display types are not hardcoded per question. `decide_display` inspects the
 returned columns and rows and accepts the agent's `chart_type` only when it
 matches the real result shape.
 
+## Worked example
+
+Asking *"What are the top 5 products by revenue?"* — the agent fetched the
+schema, wrote the join and aggregation itself, and proposed a bar chart, which
+`decide_display` accepted because the result really is one category column plus
+one numeric column.
+
+![Bar chart result for the top products question](docs/images/top-products-bar-chart.png)
+
+The generated SQL is expandable in the dashboard, and the rows behind the chart
+are shown as returned, so nothing about the answer has to be taken on trust.
+
+![Raw rows behind the chart](docs/images/top-products-raw-rows.png)
+
+Every number in the chart traces back to a row the database returned. The SQL for
+this run was:
+
+```sql
+SELECT p.name AS product_name,
+       SUM(oi.quantity * oi.unit_price) AS revenue
+FROM order_items oi
+JOIN products p ON oi.product_id = p.id
+GROUP BY p.id, p.name
+ORDER BY revenue DESC
+LIMIT 5
+```
+
 ## Project structure
 
 - `backend/agent.py`: Foundry client, agent definition, and the tool-call loop.
