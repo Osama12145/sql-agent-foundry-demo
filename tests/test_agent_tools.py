@@ -130,6 +130,73 @@ def test_unknown_tool_is_reported_not_raised():
     assert "Unknown tool" in result["error"]
 
 
+def test_bar_chart_with_an_extra_column_is_sent_back_for_correction(monkeypatch):
+    # The model asked for a bar chart but selected a redundant id column. Two
+    # columns is what display.py can honour, so the tool rejects the result
+    # rather than let the same question render as a table on some runs.
+    _mock_execute(
+        monkeypatch,
+        [{"product_id": 1, "product_name": "Laptop", "revenue": 10400.0}],
+        ["product_id", "product_name", "revenue"],
+    )
+    outcome = QueryOutcome()
+    arguments = json.dumps(
+        {
+            "sql": "SELECT p.id, p.name, SUM(x) AS revenue FROM products p",
+            "explanation": "x",
+            "chart_type": "bar",
+            "x": "product_name",
+            "y": "revenue",
+        }
+    )
+
+    result = json.loads(dispatch_tool_call(EXECUTE_TOOL, arguments, outcome))
+
+    assert result["ok"] is False
+    assert "exactly 2 column" in result["error"]
+    assert result["attempts_remaining"] == MAX_EXECUTE_ATTEMPTS - 1
+    assert outcome.rows == []
+
+
+def test_kpi_with_more_than_one_column_is_rejected(monkeypatch):
+    _mock_execute(monkeypatch, [{"city": "Riyadh", "total": 5.0}], ["city", "total"])
+    outcome = QueryOutcome()
+    arguments = json.dumps(
+        {
+            "sql": "SELECT city, SUM(x) AS total FROM customers",
+            "explanation": "x",
+            "chart_type": "kpi",
+            "y": "total",
+        }
+    )
+
+    result = json.loads(dispatch_tool_call(EXECUTE_TOOL, arguments, outcome))
+
+    assert result["ok"] is False
+    assert "exactly 1 column" in result["error"]
+
+
+def test_table_chart_type_accepts_any_column_count(monkeypatch):
+    _mock_execute(
+        monkeypatch,
+        [{"name": "Laptop", "category": "Electronics", "price": 5200.0}],
+        ["name", "category", "price"],
+    )
+    outcome = QueryOutcome()
+    arguments = json.dumps(
+        {
+            "sql": "SELECT name, category, price FROM products",
+            "explanation": "x",
+            "chart_type": "table",
+        }
+    )
+
+    result = json.loads(dispatch_tool_call(EXECUTE_TOOL, arguments, outcome))
+
+    assert result["ok"] is True
+    assert len(outcome.columns) == 3
+
+
 def test_malformed_arguments_are_reported_not_raised():
     outcome = QueryOutcome()
 

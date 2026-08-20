@@ -192,6 +192,22 @@ def _run_execute_tool(arguments: dict[str, Any], outcome: QueryOutcome) -> dict[
     except Exception as exc:
         return _failure(str(exc))
 
+    # Hold the model to the contract it just declared. display.py requires one
+    # column for a kpi and exactly two for a line or bar chart, and that rule is
+    # a real safeguard: a three-column result plotted as two axes silently drops
+    # a column. Rather than weaken it, reject the mismatch here so the agent
+    # corrects its own query. Without this the same question renders as a bar
+    # chart or a table depending on whether the model happened to select a
+    # redundant id, which is worse than either outcome on its own.
+    required = {"kpi": 1, "line": 2, "bar": 2}.get(hint["chart_type"])
+    if required is not None and len(columns) != required:
+        return _failure(
+            f"chart_type '{hint['chart_type']}' needs exactly {required} "
+            f"column(s), but the query returned {len(columns)}: {columns}. "
+            "Re-run with only the columns the chart needs, or choose "
+            "chart_type 'table' instead."
+        )
+
     outcome.error = None
     outcome.rows = rows
     outcome.columns = columns
