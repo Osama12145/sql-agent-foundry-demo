@@ -36,32 +36,87 @@ The parts that encode the application's own guarantees — the SQL safety bounda
 and the display policy — survived a complete change of orchestration engine
 untouched. Only the orchestration itself was replaced.
 
-## Architecture
+## Agent workflow
 
-Rendered diagrams, a system view and a turn-by-turn agent view, are in
-[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md). In outline:
+This is the node-and-edge view of how a question gets answered. The decisive
+detail is which box is blue: **the branching node runs in Azure, not here.** A
+graph framework would put a conditional edge we wrote at every fork. There is
+exactly one fork, and Foundry owns it.
 
+Colours: **blue** is Azure, **orange** is a tool the agent may call, **red** is
+the safety boundary no model output can bypass, **grey** is application code.
+
+```mermaid
+---
+config:
+  flowchart:
+    curve: linear
+---
+graph TD;
+    __start__([START]):::first
+    publish_agent(publish_agent):::ours
+    start_run(start_run):::ours
+    decide{{"Foundry decides<br/>next action"}}:::azure
+    get_database_schema(get_database_schema):::tool
+    execute_sql_query(execute_sql_query):::tool
+    report_unanswerable(report_unanswerable):::tool
+    validate_sql(validate_sql):::guard
+    run_query(run_query):::guard
+    return_tool_error(return_tool_error):::ours
+    decide_display(decide_display):::ours
+    final_answer(final_answer):::azure
+    fail(fail):::ours
+    __end__([END]):::last
+
+    __start__ --> publish_agent;
+    publish_agent -->|instructions + tool schemas| start_run;
+    start_run --> decide;
+
+    decide -. needs_schema .-> get_database_schema;
+    decide -. has_sql .-> execute_sql_query;
+    decide -. outside_schema .-> report_unanswerable;
+    decide -. no_tool_call .-> final_answer;
+    decide -. iteration_limit_reached .-> fail;
+
+    get_database_schema -->|schema| decide;
+
+    execute_sql_query --> validate_sql;
+    validate_sql -. valid_SQL .-> run_query;
+    validate_sql -. blocked_SQL .-> return_tool_error;
+    run_query -. success .-> decide;
+    run_query -. execution_error .-> return_tool_error;
+    return_tool_error -. attempts_remaining .-> decide;
+    return_tool_error -. attempt_budget_spent .-> fail;
+
+    report_unanswerable --> decide;
+
+    final_answer -. rows_returned .-> decide_display;
+    final_answer -. out_of_scope .-> __end__;
+    decide_display --> __end__;
+    fail --> __end__;
+
+    classDef default fill:#eef4f8,stroke:#486270,color:#14252e,line-height:1.2
+    classDef first fill:#ffffff,stroke:#2f6f64,color:#14252e
+    classDef last fill:#d9eee8,stroke:#2f6f64,color:#14252e
+    classDef azure fill:#e8f0fe,stroke:#1a73e8,color:#14252e
+    classDef tool fill:#fef7e0,stroke:#b06000,color:#14252e
+    classDef guard fill:#fce8e6,stroke:#d93025,color:#14252e
+    classDef ours fill:#eef4f8,stroke:#486270,color:#14252e
 ```
-Streamlit ──▶ FastAPI  POST /query
-                 │
-                 ▼
-        Foundry Agent Service  (Azure)
-        decides which tool to call, reads results, retries, decides when to stop
-                 │
-                 │  tool calls come back to us
-                 ▼
-        Tools executed in our backend  (backend/tools.py)
-          • get_database_schema   → db.py
-          • execute_sql_query     → validators.py → db.py
-          • report_unanswerable   → out-of-scope path
-                 │
-                 ▼
-        display.py decides KPI / line / bar / table from the real rows
-```
 
-Azure owns the workflow. We own the guarantees. The tool bodies run in our
-process, so database credentials never leave our backend and no model output
-reaches the database without passing `validate_select_sql` first.
+Every tool result returns to `Foundry decides`, and the agent keeps taking turns
+until it makes no further tool call. Two counters keep that loop finite, and both
+are ours rather than the orchestrator's: `MAX_EXECUTE_ATTEMPTS` caps rejected
+queries, `MAX_TOOL_ITERATIONS` caps the conversation. Nothing in Azure would stop
+the loop on its own.
+
+Note where `validate_sql` and `run_query` sit. The orchestration is remote, but
+every path from the model to the database still passes through them, and
+`report_unanswerable` gives the agent a way to decline that produces no SQL at
+all.
+
+A system-level view and a turn-by-turn sequence diagram are in
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ### Two safety layers, deliberately
 

@@ -206,7 +206,7 @@ sequenceDiagram
     end
 
     Run->>Disp: decide_display(rows, columns, hint)
-    note right of Disp: the agent's chart_type is only a hint;<br/>it is overridden when it does not fit<br/>the real column shape
+    note right of Disp: the agent's chart_type is only a hint,<br/>overridden when it does not fit<br/>the real column shape
     Disp-->>Run: display spec
     Run-->>API: answer, sql, rows, columns, display
     API-->>User: JSON response
